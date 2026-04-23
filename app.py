@@ -1,85 +1,110 @@
 import streamlit as st
 import pandas as pd
+import requests
 from datetime import datetime, timedelta
 
-# Ссылка на твою опубликованную таблицу (формат CSV для прямого чтения)
+# --- КОНФИГУРАЦИЯ ---
+# Твоя база данных (опубликована как CSV)
 DATABASE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTgFy7gYL5tdh_SOEmkhLpM0gEPWjJJmgmHXrsxRIzdSnIiSieeTvTBE0QvD5cxLVnt5BqKe5H-dGUN/pub?output=csv"
 
-st.set_page_config(page_title="Заявка на вывоз ТБО", page_icon="🚛")
+# Твой Apps Script для приема заявок
+SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxLomEDTnfQT8l1SQ2QkDagfZ1oqz4L0JWiccR_HNKCHwbzaRjk-n2PxO36iX5bnVwl/exec"
 
-st.title("🚛 Форма заявки на вывоз ТБО")
-st.write("Введите БИН вашей организации, чтобы подтянуть данные из договора.")
+st.set_page_config(page_title="Заявка на вывоз ТБО", page_icon="🚛", layout="centered")
 
-# Загрузка базы данных
+# Кастомные стили для красоты
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f5f7f9;
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 5px;
+        height: 3em;
+        background-color: #007bff;
+        color: white;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("🚛 Заявка на вывоз ТБО")
+st.write("Введите БИН организации для автоматического заполнения данных.")
+
+# Загрузка данных из Google Таблицы
 @st.cache_data(ttl=600)
 def load_data():
     try:
-        # Читаем CSV напрямую из Google Sheets
         df = pd.read_csv(DATABASE_URL)
-        # Очищаем БИН от лишних пробелов, если они есть
-        df['БИН/ИИН'] = df['БИН/ИИН'].astype(str).str.strip()
+        # Приводим БИН к строке и убираем лишнее
+        df['БИН/ИИН'] = df['БИН/ИИН'].astype(str).str.replace('.0', '', regex=False).str.strip()
         return df
     except Exception as e:
-        st.error(f"Ошибка загрузки базы: {e}")
+        st.error(f"Ошибка подключения к базе: {e}")
         return None
 
 df = load_data()
 
 if df is not None:
-    # Поле ввода БИН
-    bin_input = st.text_input("БИН организации (12 цифр)", placeholder="Например: 961140000659")
+    # Ввод БИН
+    bin_input = st.text_input("БИН/ИИН организации", placeholder="Например: 961140000659")
 
     if bin_input:
-        # Фильтруем данные по введенному БИНу
+        # Фильтруем базу
         client_data = df[df['БИН/ИИН'] == bin_input.strip()]
 
         if not client_data.empty:
-            # 1. Проверка наименования
+            # Отображаем название компании
             org_name = client_data['Наименование'].iloc[0]
-            st.success(f"✅ Организация: **{org_name}**")
+            st.success(f"✅ **Организация:** {org_name}")
             
-            # 2. Выбор адреса (если их несколько на одном БИН)
+            # Выбор адреса
             addresses = client_data['Адрес'].unique()
-            selected_address = st.selectbox("Выберите адрес вывоза", addresses)
+            selected_address = st.selectbox("Выберите адрес точки вывоза", addresses)
             
-            # Показываем номер договора для уверенности
-            contract = client_data[client_data['Адрес'] == selected_address]['№ и дата договора'].iloc[0]
-            st.caption(f"Договор: {contract}")
+            # Инфо о договоре
+            contract_info = client_data[client_data['Адрес'] == selected_address]['№ и дата договора'].iloc[0]
+            st.info(f"Договор: {contract_info}")
 
             st.divider()
-
-            # 3. Детали заявки
+            
+            # Поля для новой заявки
             col1, col2 = st.columns(2)
-            
             with col1:
-                # Ограничение даты: только со следующего дня
                 tomorrow = datetime.now() + timedelta(days=1)
-                order_date = st.date_input("Дата вывоза", min_value=tomorrow)
-            
+                order_date = st.date_input("Дата вывоза (минимум завтра)", min_value=tomorrow)
             with col2:
-                container_count = st.number_input("Кол-во контейнеров", min_value=1, value=1)
+                container_count = st.number_input("Кол-во контейнеров", min_value=1, value=1, step=1)
 
-            comment = st.text_area("Дополнительный комментарий (необязательно)")
+            comment = st.text_area("Комментарий к заявке", placeholder="Например: код от шлагбаума или номер телефона на месте")
 
-            # 4. Кнопка отправки
-            if st.button("Отправить заявку в работу"):
-                # Формируем объект заявки
-                order_payload = {
+            if st.button("ОТПРАВИТЬ ЗАЯВКУ"):
+                # Формируем данные
+                payload = {
                     "Дата подачи": datetime.now().strftime("%d.%m.%Y %H:%M"),
                     "БИН": bin_input,
                     "Компания": org_name,
                     "Адрес": selected_address,
                     "Желаемая дата": order_date.strftime("%d.%m.%Y"),
-                    "Кол-во": container_count,
+                    "Кол-во": str(container_count),
                     "Комментарий": comment
                 }
                 
-                # Здесь будет код для записи в "приемную" таблицу
-                st.balloons()
-                st.success("Спасибо! Ваша заявка принята.")
-                st.info("Данные заявки:")
-                st.json(order_payload)
+                with st.spinner('Отправка заявки...'):
+                    try:
+                        # Отправляем POST запрос в Google Apps Script
+                        response = requests.post(SCRIPT_URL, json=payload, timeout=10)
+                        
+                        if response.status_code == 200:
+                            st.balloons()
+                            st.success("✅ Заявка успешно принята! Менеджер увидит её в системе.")
+                        else:
+                            st.error(f"Ошибка сервера (код {response.status_code}). Попробуйте позже.")
+                    except Exception as e:
+                        st.error(f"Ошибка при отправке: {e}")
         else:
-            st.error("БИН не найден в базе. Пожалуйста, проверьте правильность ввода или свяжитесь с менеджером.")
+            st.warning("⚠️ Организация с таким БИН не найдена в базе госконтрактов.")
 
-st.sidebar.info("Система автоматизации вывоза ТБО. Выбор даты возможен только на следующий день и позже.")
+st.sidebar.markdown("---")
+st.sidebar.write("📍 **Техподдержка:**")
+st.sidebar.write("При возникновении проблем с формой обратитесь в отдел автоматизации.")
