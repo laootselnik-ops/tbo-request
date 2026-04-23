@@ -12,17 +12,10 @@ st.set_page_config(page_title="Заявка ТБО", page_icon="🚛")
 @st.cache_data(ttl=600)
 def load_data():
     try:
-        # Читаем таблицу
         df = pd.read_csv(DATABASE_URL)
-        
-        # 1. Удаляем полностью пустые строки, если они есть (например, в начале таблицы)
         df = df.dropna(how='all')
-        
-        # 2. Исправленная магия для объединенных ячеек (НОВЫЙ СИНТАКСИС)
         df['БИН/ИИН'] = df['БИН/ИИН'].ffill()
         df['Наименование'] = df['Наименование'].ffill()
-        
-        # 3. Очистка БИН
         df['БИН/ИИН'] = df['БИН/ИИН'].astype(str).str.replace('.0', '', regex=False).str.strip()
         return df
     except Exception as e:
@@ -32,48 +25,74 @@ def load_data():
 df = load_data()
 
 st.title("🚛 Заявка на вывоз ТБО")
+st.info("Инструкция: Введите БИН вашей компании, выберите нужные адреса из списка и укажите дату вывоза.")
 
 if df is not None:
-    bin_input = st.text_input("Введите БИН организации", placeholder="12 цифр")
+    # Поле БИН
+    st.markdown("### 1. Идентификация")
+    bin_input = st.text_input(
+        "Введите БИН организации (12 цифр)", 
+        placeholder="Например: 961140000659",
+        help="БИН указан в вашем договоре на вывоз ТБО."
+    )
 
     if bin_input:
-        # Поиск по БИН
         search_bin = bin_input.strip()
         client_data = df[df['БИН/ИИН'] == search_bin]
 
         if not client_data.empty:
             org_name = client_data['Наименование'].iloc[0]
-            st.success(f"✅ Организация: **{org_name}**")
+            st.success(f"✅ Организация найдена: **{org_name}**")
             
-            # Выбор адресов (мультивыбор)
+            # Поле Адреса
+            st.markdown("### 2. Выбор точек вывоза")
             all_addresses = client_data['Адрес'].unique().tolist()
             selected_addresses = st.multiselect(
-                "Выберите адрес(а) для вывоза:",
+                "Нажмите сюда и выберите адрес(а), откуда нужно забрать мусор:",
                 options=all_addresses,
-                default=[all_addresses[0]]
+                default=[],  # УБРАН АВТОВЫБОР
+                help="Можно выбрать сразу несколько адресов, если у вашей компании их много."
             )
 
-            if selected_addresses:
+            if not selected_addresses:
+                st.warning("⚠️ Обязательно выберите хотя бы один адрес из списка выше, чтобы продолжить.")
+            else:
                 st.divider()
                 
-                # Общие параметры даты
+                # Поле Даты
+                st.markdown("### 3. Дата и количество")
                 tomorrow = datetime.now() + timedelta(days=1)
-                order_date = st.date_input("Дата вывоза (минимум завтра)", min_value=tomorrow)
+                order_date = st.date_input(
+                    "На какой день планируем вывоз?", 
+                    min_value=tomorrow,
+                    help="Заявки принимаются минимум за день до фактического выезда. На 'сегодня' заказать нельзя."
+                )
                 
-                # Параметры по каждой точке
                 container_data = {}
-                st.write("### Детали по каждой точке:")
                 for addr in selected_addresses:
-                    # Ищем № договора для конкретного адреса
                     contract = client_data[client_data['Адрес'] == addr]['№ и дата договора'].iloc[0]
-                    st.caption(f"📍 {addr} (Договор: {contract})")
-                    container_data[addr] = st.number_input(f"Кол-во контейнеров", min_value=1, value=1, key=addr)
+                    st.write(f"---")
+                    st.markdown(f"📍 **Точка:** {addr}")
+                    st.caption(f"Договор: {contract}")
+                    
+                    container_data[addr] = st.number_input(
+                        f"Сколько контейнеров забираем по этому адресу?", 
+                        min_value=1, 
+                        value=1, 
+                        key=addr,
+                        help="Укажите количество полных баков, которые нужно опорожнить."
+                    )
 
-                comment = st.text_area("Дополнительный комментарий к заявке")
+                st.markdown("### 4. Дополнительно")
+                comment = st.text_area(
+                    "Комментарий для водителя (необязательно)", 
+                    placeholder="Например: Номер телефона ответственного на месте или код от ворот.",
+                    help="Любая информация, которая поможет водителю быстрее найти ваши контейнеры."
+                )
 
                 if st.button("ОТПРАВИТЬ ВСЕ ЗАЯВКИ"):
                     success_count = 0
-                    with st.spinner('Отправка данных...'):
+                    with st.spinner('Связь с базой данных...'):
                         for addr in selected_addresses:
                             payload = {
                                 "Дата подачи": datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -94,11 +113,14 @@ if df is not None:
 
                     if success_count == len(selected_addresses):
                         st.balloons()
-                        st.success(f"✅ Успешно отправлено заявок: {success_count}")
-            else:
-                st.warning("Пожалуйста, выберите хотя бы один адрес.")
+                        st.success(f"✅ Готово! Отправлено заявок: {success_count}. Ожидайте спецтехнику в указанный день.")
         else:
-            st.error("БИН не найден в базе. Проверьте правильность ввода.")
+            st.error("❌ БИН не найден. Пожалуйста, убедитесь, что ввели 12 цифр правильно. Если всё верно, значит вашей компании нет в базе госзакупок.")
 
-st.sidebar.markdown("---")
-st.sidebar.caption("Приложение для автоматизации заявок на вывоз ТБО")
+st.sidebar.markdown("### 💡 Памятка пользователю")
+st.sidebar.write("""
+1. Сначала БИН.
+2. Потом Адрес (выберите из выпадающего списка).
+3. Укажите дату (только на завтра и далее).
+4. Нажмите синюю кнопку внизу.
+""")
